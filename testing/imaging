@@ -8,9 +8,9 @@ upper_blue = np.array([130, 255, 255]) # Default upper bound for blue in HSV
 threshold_value = 50                   # Default threshold value
 blur_kernel_size = 5                   # Default blur kernel size
 
-# Load images from directory
+"""hard coded here"""
 current_image_index = 0
-image_directory = 'D:/Hackathon/images/pre/'
+image_directory = 'D:/Hackathon/images/pre/' # Path to the image directory 
 image_files = [f for f in os.listdir(image_directory) if f.endswith(('.jpg', '.png', '.jpeg'))]
 
 if not image_files:

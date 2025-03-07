@@ -1,239 +1,199 @@
 import cv2
 import numpy as np
-import matplotlib.pyplot as plt
 from skimage import measure, morphology
+from skimage.measure import regionprops
 import os
-import glob
-from datetime import datetime
+import tempfile
+from PIL import Image, ImageTk
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
 
-def detect_and_mask_signature(image_path, output_path=None, use_dynamic_params=True):
+# Signature extraction function
+def extract_signatures(image, use_dynamic_params=True):
     """
-    Detects signatures in a document image and masks them out (replaces with white)
-    
-    Args:
-        image_path: Path to the input document image
-        output_path: Path to save the output image (optional)
-        use_dynamic_params: Whether to use dynamic model parameters or constant ones
-        
-    Returns:
-        Tuple of (original image, masked image, signature regions)
+    Extracts signatures from a document image using Ahmet Ozlu's method.
     """
-    # Read the image
-    original = cv2.imread(image_path)
-    if original is None:
-        raise ValueError(f"Could not read image: {image_path}")
-        
-    # Make a copy for masking
-    masked_img = original.copy()
+    img = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if len(image.shape) == 3 else image
+    img = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY)[1]
     
-    # Convert to grayscale
-    gray = cv2.cvtColor(original, cv2.COLOR_BGR2GRAY)
+    blobs = img > img.mean()
+    blobs_labels = measure.label(blobs, background=1)
     
-    # Apply Gaussian blur to reduce noise
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    
-    # Apply adaptive thresholding
-    thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                   cv2.THRESH_BINARY_INV, 11, 2)
-    
-    # Remove small noise
-    kernel = np.ones((2, 2), np.uint8)
-    opening = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
-    
-    # Dilate to connect signature components
-    dilated = cv2.dilate(opening, kernel, iterations=2)
-    
-    # Label connected components
-    labels = measure.label(dilated)
-    
-    # Measure properties of connected components
-    regions = measure.regionprops(labels)
-    
-    # Store potential signature regions
-    signature_regions = []
-    
-    # Set parameters based on mode
     if use_dynamic_params:
-        # Dynamic parameters from the model
-        min_region_size = 20
-        min_complexity = 70
-        density_range = (0.05, 0.4)
-        min_stroke_variation = 0.5
-        aspect_ratio_range = (0.2, 5)
-        alt_width_threshold = 100
-        alt_complexity = 60
-        alt_density_range = (0.05, 0.3)
+        constant_parameter_1 = 84
+        constant_parameter_2 = 250
+        constant_parameter_3 = 100
+        constant_parameter_4 = 18
     else:
-        # Constant parameters
-        min_region_size = 15  # More sensitive to smaller signatures
-        min_complexity = 50   # Less strict on complexity
-        density_range = (0.03, 0.5)  # Wider density range
-        min_stroke_variation = 0.4   # Less strict on stroke variation
-        aspect_ratio_range = (0.1, 6)  # Wider aspect ratio range
-        alt_width_threshold = 80
-        alt_complexity = 45
-        alt_density_range = (0.03, 0.4)
+        constant_parameter_1 = 100
+        constant_parameter_2 = 200
+        constant_parameter_3 = 120
+        constant_parameter_4 = 20
     
-    for region in regions:
-        # Get region coordinates
-        minr, minc, maxr, maxc = region.bbox
-        height = maxr - minr
-        width = maxc - minc
-        
-        # Filter small noise
-        if width < min_region_size or height < min_region_size:
-            continue
-            
-        # Extract region of interest
-        roi = dilated[minr:maxr, minc:maxc]
-        
-        # Calculate signature-specific metrics
-        
-        # 1. Curvature analysis
-        contours, _ = cv2.findContours(roi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Skip regions with no contours
-        if not contours:
-            continue
-            
-        # Find the largest contour
-        largest_contour = max(contours, key=cv2.contourArea)
-        
-        # Calculate complexity (perimeter²/area)
-        perimeter = cv2.arcLength(largest_contour, True)
-        area = cv2.contourArea(largest_contour)
-        
-        complexity = 0
-        if area > 0:
-            complexity = (perimeter * perimeter) / area
-        
-        # 2. Calculate density
-        density = np.sum(roi) / (roi.shape[0] * roi.shape[1] * 255)
-        
-        # 3. Calculate aspect ratio
-        aspect_ratio = width / height if height > 0 else 0
-        
-        # 4. Analyze stroke width variation
-        horizontal_projection = np.sum(roi, axis=1)
-        vertical_projection = np.sum(roi, axis=0)
-        h_variation = np.std(horizontal_projection) / (np.mean(horizontal_projection) + 1e-10)
-        v_variation = np.std(vertical_projection) / (np.mean(vertical_projection) + 1e-10)
-        stroke_variation = (h_variation + v_variation) / 2
-        
-        # Combine metrics for signature classification
-        is_signature = (complexity > min_complexity and 
-                        density_range[0] < density < density_range[1] and 
-                        stroke_variation > min_stroke_variation and
-                        aspect_ratio_range[0] < aspect_ratio < aspect_ratio_range[1])
-        
-        # Alternative condition for longer signatures
-        if width > alt_width_threshold and complexity > alt_complexity and alt_density_range[0] < density < alt_density_range[1]:
-            is_signature = True
-            
-        if is_signature:
-            # Store coordinates for masking
-            signature_regions.append((minc, minr, maxc, maxr))
-            
-            # Draw rectangle on original image (for visualization)
-            cv2.rectangle(original, (minc, minr), (maxc, maxr), (0, 255, 0), 2)
-            
-            # Mask out the signature region (replace with white)
-            masked_img[minr:maxr, minc:maxc] = [255, 255, 255]
+    the_biggest_component = 0
+    total_area = 0
+    counter = 0
     
-    # Save output if path is provided
-    if output_path:
-        cv2.imwrite(output_path, masked_img)
+    for region in regionprops(blobs_labels):
+        if region.area > 10:
+            total_area += region.area
+            counter += 1
+        if region.area >= 250 and region.area > the_biggest_component:
+            the_biggest_component = region.area
     
-    return original, masked_img, signature_regions
+    average = total_area / counter if counter > 0 else 0
+    a4_small_size_outliar_constant = ((average / constant_parameter_1) * constant_parameter_2) + constant_parameter_3
+    a4_big_size_outliar_constant = a4_small_size_outliar_constant * constant_parameter_4
+    
+    pre_version = morphology.remove_small_objects(blobs_labels, a4_small_size_outliar_constant)
+    
+    component_sizes = np.bincount(pre_version.ravel())
+    too_small = component_sizes > a4_big_size_outliar_constant
+    too_small_mask = too_small[pre_version]
+    pre_version[too_small_mask] = 0
+    
+    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temp_file:
+        temp_path = temp_file.name
+        plt.imsave(temp_path, pre_version)
+    
+    result = cv2.imread(temp_path, 0)
+    result = cv2.threshold(result, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)[1]
+    
+    if os.path.exists(temp_path):
+        os.remove(temp_path)
+    
+    signature_pixels = np.count_nonzero(result)
+    
+    params = {
+        "constant_parameter_1": constant_parameter_1,
+        "constant_parameter_2": constant_parameter_2,
+        "constant_parameter_3": constant_parameter_3,
+        "constant_parameter_4": constant_parameter_4,
+        "signature_pixels": signature_pixels
+    }
+    
+    return result, params, signature_pixels
 
-def process_folder(input_folder, output_folder_dynamic, output_folder_constant):
-    """
-    Processes all images in a folder using both parameter sets
+
+def extract_signature_area(original_image, mask):
+    """Extracts the signature from the original image using the mask."""
+    if len(original_image.shape) == 3:
+        mask_3c = cv2.cvtColor(mask, cv2.COLOR_GRAY2RGB)
+        mask_inv = cv2.bitwise_not(mask_3c)
+        signature_only = cv2.bitwise_and(original_image, mask_inv)
+        white_bg = np.ones_like(original_image) * 255
+        bg_mask = cv2.bitwise_not(mask_inv)
+        final_result = cv2.bitwise_and(white_bg, bg_mask) + signature_only
+        return final_result
+    else:
+        mask_inv = cv2.bitwise_not(mask)
+        signature_only = cv2.bitwise_and(original_image, mask_inv)
+        white_bg = np.ones_like(original_image) * 255
+        bg_mask = cv2.bitwise_not(mask_inv)
+        final_result = cv2.bitwise_and(white_bg, bg_mask) + signature_only
+        return final_result
+
+
+# Tkinter GUI Application
+class SignatureExtractorApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Signature Extraction Tool")
+        self.root.geometry("800x600")
+        
+        # Variables
+        self.image = None
+        self.dynamic_mask = None
+        self.static_mask = None
+        self.dynamic_signature = None
+        self.static_signature = None
+        
+        # UI Elements
+        self.label = tk.Label(root, text="Upload a document image to extract signatures", font=("Arial", 14))
+        self.label.pack(pady=10)
+        
+        self.upload_button = tk.Button(root, text="Upload Image", command=self.upload_image)
+        self.upload_button.pack(pady=10)
+        
+        self.process_button = tk.Button(root, text="Extract Signatures", command=self.process_image, state=tk.DISABLED)
+        self.process_button.pack(pady=10)
+        
+        self.tab_control = ttk.Notebook(root)
+        self.tab1 = ttk.Frame(self.tab_control)
+        self.tab2 = ttk.Frame(self.tab_control)
+        self.tab3 = ttk.Frame(self.tab_control)
+        self.tab_control.add(self.tab1, text="Dynamic Parameters")
+        self.tab_control.add(self.tab2, text="Static Parameters")
+        self.tab_control.add(self.tab3, text="Comparison")
+        self.tab_control.pack(expand=1, fill="both")
+        
+        # Dynamic Parameters Tab
+        self.dynamic_mask_label = tk.Label(self.tab1, text="Signature Mask")
+        self.dynamic_mask_label.pack()
+        self.dynamic_signature_label = tk.Label(self.tab1, text="Extracted Signature")
+        self.dynamic_signature_label.pack()
+        
+        # Static Parameters Tab
+        self.static_mask_label = tk.Label(self.tab2, text="Signature Mask")
+        self.static_mask_label.pack()
+        self.static_signature_label = tk.Label(self.tab2, text="Extracted Signature")
+        self.static_signature_label.pack()
+        
+        # Comparison Tab
+        self.comparison_label = tk.Label(self.tab3, text="Dynamic vs Static Parameters")
+        self.comparison_label.pack()
     
-    Args:
-        input_folder: Path to the folder containing images
-        output_folder_dynamic: Path to save images processed with dynamic parameters
-        output_folder_constant: Path to save images processed with constant parameters
-    """
-    # Create output folders if they don't exist
-    os.makedirs(output_folder_dynamic, exist_ok=True)
-    os.makedirs(output_folder_constant, exist_ok=True)
+    def upload_image(self):
+        file_path = filedialog.askopenfilename(filetypes=[("Image Files", "*.jpg;*.jpeg;*.png;*.bmp;*.tiff;*.tif")])
+        if file_path:
+            self.image = cv2.imread(file_path)
+            self.image = cv2.cvtColor(self.image, cv2.COLOR_BGR2RGB)
+            self.process_button.config(state=tk.NORMAL)
+            messagebox.showinfo("Success", "Image uploaded successfully!")
     
-    # Get all image files in the input folder
-    image_extensions = ['*.jpg', '*.jpeg', '*.png', '*.bmp', '*.tiff', '*.tif']
-    image_files = []
-    for ext in image_extensions:
-        image_files.extend(glob.glob(os.path.join(input_folder, ext)))
-        image_files.extend(glob.glob(os.path.join(input_folder, ext.upper())))
-    
-    # Process each image
-    dynamic_results = []
-    constant_results = []
-    
-    for img_path in image_files:
-        try:
-            # Get filename without extension
-            filename = os.path.splitext(os.path.basename(img_path))[0]
-            
+    def process_image(self):
+        if self.image is not None:
             # Process with dynamic parameters
-            dynamic_output_path = os.path.join(output_folder_dynamic, f"{filename}_masked.png")
-            _, _, dynamic_regions = detect_and_mask_signature(img_path, dynamic_output_path, use_dynamic_params=True)
-            dynamic_results.append((filename, len(dynamic_regions)))
+            self.dynamic_mask, dynamic_params, dynamic_pixels = extract_signatures(self.image, use_dynamic_params=True)
+            self.dynamic_signature = extract_signature_area(self.image, self.dynamic_mask)
             
-            # Process with constant parameters
-            constant_output_path = os.path.join(output_folder_constant, f"{filename}_masked.png")
-            _, _, constant_regions = detect_and_mask_signature(img_path, constant_output_path, use_dynamic_params=False)
-            constant_results.append((filename, len(constant_regions)))
+            # Process with static parameters
+            self.static_mask, static_params, static_pixels = extract_signatures(self.image, use_dynamic_params=False)
+            self.static_signature = extract_signature_area(self.image, self.static_mask)
             
-            print(f"Processed {filename}: Found {len(dynamic_regions)} regions (dynamic) and {len(constant_regions)} regions (constant)")
-            
-        except Exception as e:
-            print(f"Error processing {img_path}: {e}")
+            # Display results
+            self.display_results()
     
-    # Generate summary report
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    
-    with open(os.path.join(output_folder_dynamic, f"summary_dynamic_{timestamp}.txt"), 'w') as f:
-        f.write("Summary Report - Dynamic Parameters\n")
-        f.write("="*50 + "\n")
-        f.write(f"Processed {len(image_files)} images\n")
-        f.write("-"*50 + "\n")
-        for filename, count in dynamic_results:
-            f.write(f"{filename}: {count} signature regions\n")
-    
-    with open(os.path.join(output_folder_constant, f"summary_constant_{timestamp}.txt"), 'w') as f:
-        f.write("Summary Report - Constant Parameters\n")
-        f.write("="*50 + "\n")
-        f.write(f"Processed {len(image_files)} images\n")
-        f.write("-"*50 + "\n")
-        for filename, count in constant_results:
-            f.write(f"{filename}: {count} signature regions\n")
-    
-    return len(image_files), dynamic_results, constant_results
-
-def main():
-
-    input_folder = "D:/Hackathon/images/preprocessed without augmentation"
-    output_folder_dynamic = "D:/Hackathon/output/dynamic"
-    output_folder_constant = "D:/Hackathon/output/constant"
-    
-    try:
-        num_processed, dynamic_results, constant_results = process_folder(
-            input_folder, output_folder_dynamic, output_folder_constant)
+    def display_results(self):
+        # Display dynamic results
+        dynamic_mask_img = Image.fromarray(self.dynamic_mask)
+        dynamic_mask_img = dynamic_mask_img.resize((300, 300))
+        dynamic_mask_img = ImageTk.PhotoImage(dynamic_mask_img)
+        self.dynamic_mask_label.config(image=dynamic_mask_img)
+        self.dynamic_mask_label.image = dynamic_mask_img
         
-        print(f"\nProcessing complete! Processed {num_processed} images.")
-        print(f"Results saved to: \n- {output_folder_dynamic} \n- {output_folder_constant}")
+        dynamic_signature_img = Image.fromarray(self.dynamic_signature)
+        dynamic_signature_img = dynamic_signature_img.resize((300, 300))
+        dynamic_signature_img = ImageTk.PhotoImage(dynamic_signature_img)
+        self.dynamic_signature_label.config(image=dynamic_signature_img)
+        self.dynamic_signature_label.image = dynamic_signature_img
         
-        # Display summary statistics
-        dynamic_total = sum(count for _, count in dynamic_results)
-        constant_total = sum(count for _, count in constant_results)
+        # Display static results
+        static_mask_img = Image.fromarray(self.static_mask)
+        static_mask_img = static_mask_img.resize((300, 300))
+        static_mask_img = ImageTk.PhotoImage(static_mask_img)
+        self.static_mask_label.config(image=static_mask_img)
+        self.static_mask_label.image = static_mask_img
         
-        print("\n=== Summary Statistics ===")
-        print(f"Dynamic parameters: {dynamic_total} signature regions detected")
-        print(f"Constant parameters: {constant_total} signature regions detected")
-            
-    except Exception as e:
-        print(f"Error: {e}")
+        static_signature_img = Image.fromarray(self.static_signature)
+        static_signature_img = static_signature_img.resize((300, 300))
+        static_signature_img = ImageTk.PhotoImage(static_signature_img)
+        self.static_signature_label.config(image=static_signature_img)
+        self.static_signature_label.image = static_signature_img
 
+
+# Run the application
 if __name__ == "__main__":
-    main()
+    root = tk.Tk()
+    app = SignatureExtractorApp(root)
+    root.mainloop()
