@@ -145,6 +145,47 @@ def extract_signature_area(original_image, mask):
     return final_result
 
 
+def extract_inverted_area(original_image, mask):
+    """Extracts everything EXCEPT the signature from the original image."""
+    # Create a copy to avoid modifying the original
+    original_copy = original_image.copy()
+    
+    if len(original_copy.shape) == 3:
+        # For color images
+        # Convert single-channel mask to 3-channel if needed
+        if len(mask.shape) == 2:
+            mask_3c = cv2.cvtColor(mask, cv2.COLOR_GRAY2RGB)
+        else:
+            mask_3c = mask.copy()
+            
+        # Extract non-signature parts (using the mask directly)
+        document_only = cv2.bitwise_and(original_copy, original_copy, mask=mask)
+        
+        # Create white background where there are signatures
+        white_bg = np.ones_like(original_copy) * 255
+        white_areas = cv2.bitwise_and(white_bg, white_bg, mask=cv2.bitwise_not(mask))
+        
+        # Combine document and white background
+        final_result = cv2.add(document_only, white_areas)
+    else:
+        # For grayscale images
+        if len(mask.shape) == 3:
+            # If mask is somehow 3-channel but original is grayscale, convert mask to single channel
+            mask = cv2.cvtColor(mask, cv2.COLOR_RGB2GRAY)
+            
+        # Extract non-signature parts
+        document_only = cv2.bitwise_and(original_copy, mask)
+        
+        # Create white background for signature areas
+        white_bg = np.ones_like(original_copy) * 255
+        white_areas = cv2.bitwise_and(white_bg, cv2.bitwise_not(mask))
+        
+        # Combine
+        final_result = cv2.add(document_only, white_areas)
+    
+    return final_result
+
+
 # Tkinter GUI Application
 class SignatureExtractorApp:
     def __init__(self, root):
@@ -159,6 +200,8 @@ class SignatureExtractorApp:
         self.static_mask = None
         self.dynamic_signature = None
         self.static_signature = None
+        self.dynamic_inverted = None
+        self.static_inverted = None
         self.dynamic_params = None
         self.static_params = None
         
@@ -197,9 +240,11 @@ class SignatureExtractorApp:
         self.tab1 = ttk.Frame(self.tab_control)
         self.tab2 = ttk.Frame(self.tab_control)
         self.tab3 = ttk.Frame(self.tab_control)
+        self.tab4 = ttk.Frame(self.tab_control)
         self.tab_control.add(self.tab1, text="Dynamic Parameters")
         self.tab_control.add(self.tab2, text="Static Parameters")
-        self.tab_control.add(self.tab3, text="Comparison")
+        self.tab_control.add(self.tab3, text="Inverted Mask")
+        self.tab_control.add(self.tab4, text="Comparison")
         self.tab_control.pack(expand=True, fill="both")
         
         # Dynamic Parameters Tab
@@ -244,8 +289,29 @@ class SignatureExtractorApp:
         self.static_info_label = ttk.Label(self.tab2, text="", justify=tk.LEFT)
         self.static_info_label.pack(pady=10, fill=tk.X)
         
+        # Inverted Mask Tab (New)
+        inv_frame = ttk.Frame(self.tab3, padding=10)
+        inv_frame.pack(fill=tk.BOTH, expand=True)
+        
+        inv_left_frame = ttk.Frame(inv_frame)
+        inv_left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+        
+        inv_right_frame = ttk.Frame(inv_frame)
+        inv_right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
+        
+        ttk.Label(inv_left_frame, text="Dynamic Parameter Inverted Result").pack(pady=(0, 5))
+        self.dynamic_inverted_label = ttk.Label(inv_left_frame, borderwidth=1, relief="solid")
+        self.dynamic_inverted_label.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(inv_right_frame, text="Static Parameter Inverted Result").pack(pady=(0, 5))
+        self.static_inverted_label = ttk.Label(inv_right_frame, borderwidth=1, relief="solid")
+        self.static_inverted_label.pack(fill=tk.BOTH, expand=True)
+        
+        self.inverted_info_label = ttk.Label(self.tab3, text="Inverted view shows the document with signatures removed", justify=tk.LEFT)
+        self.inverted_info_label.pack(pady=10, fill=tk.X)
+        
         # Comparison Tab
-        comp_frame = ttk.Frame(self.tab3, padding=10)
+        comp_frame = ttk.Frame(self.tab4, padding=10)
         comp_frame.pack(fill=tk.BOTH, expand=True)
         
         self.comparison_text = tk.Text(comp_frame, height=15, width=80)
@@ -311,6 +377,7 @@ class SignatureExtractorApp:
                 self.image, use_dynamic_params=True
             )
             self.dynamic_signature = extract_signature_area(self.image, self.dynamic_mask)
+            self.dynamic_inverted = extract_inverted_area(self.image, self.dynamic_mask)
             
             self.status_var.set("Processing image with static parameters...")
             self.root.update()
@@ -320,6 +387,7 @@ class SignatureExtractorApp:
                 self.image, use_dynamic_params=False
             )
             self.static_signature = extract_signature_area(self.image, self.static_mask)
+            self.static_inverted = extract_inverted_area(self.image, self.static_mask)
             
             # Display results
             self.display_results()
@@ -374,6 +442,20 @@ class SignatureExtractorApp:
             # Update info text
             self.static_info_label.config(text=f"Static Parameters: {self.format_params(self.static_params)}")
         
+        # Display inverted results
+        if self.dynamic_inverted is not None and self.static_inverted is not None:
+            dynamic_inv_img = Image.fromarray(self.dynamic_inverted)
+            dynamic_inv_resized = self.resize_preserve_aspect(dynamic_inv_img, display_width, display_height)
+            dynamic_inv_photo = ImageTk.PhotoImage(dynamic_inv_resized)
+            self.dynamic_inverted_label.config(image=dynamic_inv_photo)
+            self.dynamic_inverted_label.image = dynamic_inv_photo
+            
+            static_inv_img = Image.fromarray(self.static_inverted)
+            static_inv_resized = self.resize_preserve_aspect(static_inv_img, display_width, display_height)
+            static_inv_photo = ImageTk.PhotoImage(static_inv_resized)
+            self.static_inverted_label.config(image=static_inv_photo)
+            self.static_inverted_label.image = static_inv_photo
+        
         # Update comparison tab
         self.update_comparison()
     
@@ -416,6 +498,9 @@ class SignatureExtractorApp:
             self.comparison_text.insert(tk.END, "\nRESULTS COMPARISON:\n")
             self.comparison_text.insert(tk.END, f"  Pixel difference: {pixel_diff} pixels ({pixel_percent:.2f}%)\n")
             self.comparison_text.insert(tk.END, f"  Better method: {'Dynamic' if dyn_pixels > static_pixels else 'Static'} parameters extracted more signature pixels\n")
+            self.comparison_text.insert(tk.END, "\nINVERTED VIEW COMPARISON:\n")
+            self.comparison_text.insert(tk.END, "  The inverted view shows the document with signature areas removed.\n")
+            self.comparison_text.insert(tk.END, "  This can be useful for document content extraction without signatures.\n")
     
     def save_signatures(self):
         if self.dynamic_signature is None or self.static_signature is None:
@@ -435,11 +520,18 @@ class SignatureExtractorApp:
             static_path = os.path.join(save_dir, "static_signature.png")
             cv2.imwrite(static_path, cv2.cvtColor(self.static_signature, cv2.COLOR_RGB2BGR))
             
-            messagebox.showinfo("Success", f"Signatures saved to:\n{save_dir}")
-            self.status_var.set(f"Signatures saved to {save_dir}")
+            # Save inverted views
+            dynamic_inv_path = os.path.join(save_dir, "dynamic_inverted.png")
+            cv2.imwrite(dynamic_inv_path, cv2.cvtColor(self.dynamic_inverted, cv2.COLOR_RGB2BGR))
+            
+            static_inv_path = os.path.join(save_dir, "static_inverted.png")
+            cv2.imwrite(static_inv_path, cv2.cvtColor(self.static_inverted, cv2.COLOR_RGB2BGR))
+            
+            messagebox.showinfo("Success", f"All images saved to:\n{save_dir}")
+            self.status_var.set(f"Images saved to {save_dir}")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to save signatures: {str(e)}")
-            self.status_var.set("Error saving signatures")
+            messagebox.showerror("Error", f"Failed to save images: {str(e)}")
+            self.status_var.set("Error saving images")
 
 
 # Run the application
