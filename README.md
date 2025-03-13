@@ -1,6 +1,6 @@
 # Stamp and Signature Segmentation
 
-This repository contains a **custom-trained model** that has been integrated into a GUI for easy interaction. The model has been trained using a step-by-step annotation and refinement process to ensure high accuracy.
+This repository contains a **custom-trained model** that has been integrated into a GUI for easy interaction. The model has been trained using a step-by-step annotation and refinement process to ensure high accuracy. 
 
 ## Model Information
 - **Folder Structure:** The trained model is stored under `final_model/`.
